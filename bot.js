@@ -10,9 +10,11 @@
  */
 
 import "dotenv/config";
-import { readFileSync, writeFileSync, existsSync, appendFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from "fs";
 import crypto from "crypto";
 import { execSync } from "child_process";
+import { homedir } from "os";
+import { join } from "path";
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
@@ -369,10 +371,14 @@ async function placeBitGetOrder(symbol, side, sizeUSD, price) {
 
 // ─── Tax CSV Logging ─────────────────────────────────────────────────────────
 
-const CSV_FILE = "trades.csv";
+const CSV_DIR = process.platform === "win32"
+  ? join(homedir(), "Desktop", "Trading Bot")
+  : ".";
+const CSV_FILE = join(CSV_DIR, "trades.csv");
 
 // Always ensure trades.csv exists with headers — open it in Excel/Sheets any time
 function initCsv() {
+  if (!existsSync(CSV_DIR)) mkdirSync(CSV_DIR, { recursive: true });
   if (!existsSync(CSV_FILE)) {
     const funnyNote = `,,,,,,,,,,,"NOTE","Hey, if you're at this stage of the video, you must be enjoying it... perhaps you could hit subscribe now? :)"`;
     writeFileSync(CSV_FILE, CSV_HEADERS + "\n" + funnyNote + "\n");
