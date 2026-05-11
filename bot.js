@@ -22,6 +22,16 @@ function checkOnboarding() {
   const required = ["BITGET_API_KEY", "BITGET_SECRET_KEY", "BITGET_PASSPHRASE"];
   const missing = required.filter((k) => !process.env[k]);
 
+  if (missing.length === 0) {
+    const csvPath = new URL("trades.csv", import.meta.url).pathname;
+    console.log(`\n📄 Trade log: ${csvPath}`);
+    console.log(
+      `   Open in Google Sheets or Excel any time — or tell Claude to move it:\n` +
+        `   "Move my trades.csv to ~/Desktop" or "Move it to my Documents folder"\n`,
+    );
+    return;
+  }
+
   if (!existsSync(".env")) {
     console.log(
       "\n⚠️  No .env file found — opening it for you to fill in...\n",
@@ -89,7 +99,11 @@ const CONFIG = {
   },
 };
 
-const LOG_FILE = "safety-check-log.json";
+// DATA_DIR overrides default write location — used on Railway with a persistent
+// volume mounted at e.g. /data so trades.csv and safety-check-log.json survive
+// across cron invocations. Falls back to existing behavior when unset.
+const DATA_DIR = process.env.DATA_DIR || null;
+const LOG_FILE = DATA_DIR ? join(DATA_DIR, "safety-check-log.json") : "safety-check-log.json";
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 
@@ -126,7 +140,7 @@ async function fetchCandles(symbol, interval, limit = 100) {
   };
   const binanceInterval = intervalMap[interval] || "1m";
 
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
+  const url = `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Binance API error: ${res.status}`);
   const data = await res.json();
@@ -371,7 +385,9 @@ async function placeBitGetOrder(symbol, side, sizeUSD, price) {
 
 // ─── Tax CSV Logging ─────────────────────────────────────────────────────────
 
-const CSV_DIR = process.platform === "win32"
+const CSV_DIR = DATA_DIR
+  ? DATA_DIR
+  : process.platform === "win32"
   ? join(homedir(), "Desktop", "Trading Bot")
   : ".";
 const CSV_FILE = join(CSV_DIR, "trades.csv");
@@ -536,10 +552,10 @@ async function run() {
   const rsi3 = calcRSI(closes, 3);
 
   console.log(`  EMA(8):  $${ema8.toFixed(2)}`);
-  console.log(`  VWAP:    $${vwap ? vwap.toFixed(2) : "N/A"}`);
-  console.log(`  RSI(3):  ${rsi3 ? rsi3.toFixed(2) : "N/A"}`);
+  console.log(`  VWAP:    $${vwap !== null ? vwap.toFixed(2) : "N/A"}`);
+  console.log(`  RSI(3):  ${rsi3 !== null ? rsi3.toFixed(2) : "N/A"}`);
 
-  if (!vwap || !rsi3) {
+  if (vwap === null || rsi3 === null) {
     console.log("\n⚠️  Not enough data to calculate indicators. Exiting.");
     return;
   }
