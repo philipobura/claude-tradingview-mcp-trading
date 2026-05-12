@@ -91,6 +91,8 @@ const CONFIG = {
   maxTradesPerDay: parseInt(process.env.MAX_TRADES_PER_DAY || "3"),
   paperTrading: process.env.PAPER_TRADING !== "false",
   tradeMode: process.env.TRADE_MODE || "spot",
+  takeProfitPct: parseFloat(process.env.TAKE_PROFIT_PCT || "1.0") / 100,
+  stopLossPct: parseFloat(process.env.STOP_LOSS_PCT || "0.5") / 100,
   bitget: {
     apiKey: process.env.BITGET_API_KEY,
     secretKey: process.env.BITGET_SECRET_KEY,
@@ -105,6 +107,7 @@ const CONFIG = {
 const DATA_DIR = process.env.DATA_DIR || null;
 const SHEET_WEBHOOK = process.env.SHEET_WEBHOOK_URL || null;
 const LOG_FILE = DATA_DIR ? join(DATA_DIR, "safety-check-log.json") : "safety-check-log.json";
+const POSITION_FILE = DATA_DIR ? join(DATA_DIR, "position.json") : "position.json";
 
 // ─── Google Sheet Webhook ────────────────────────────────────────────────────
 
@@ -138,6 +141,22 @@ async function postToSheet(logEntry) {
   } catch (err) {
     console.log(`Google Sheet webhook failed: ${err.message}`);
   }
+}
+
+// ─── Position Management ─────────────────────────────────────────────────────
+
+function loadPosition() {
+  if (!existsSync(POSITION_FILE)) return null;
+  const data = JSON.parse(readFileSync(POSITION_FILE, "utf8"));
+  return data;
+}
+
+function savePosition(position) {
+  writeFileSync(POSITION_FILE, JSON.stringify(position, null, 2));
+}
+
+function clearPosition() {
+  writeFileSync(POSITION_FILE, JSON.stringify(null));
 }
 
 // ─── Logging ────────────────────────────────────────────────────────────────
@@ -520,6 +539,58 @@ function writeTradeCsv(logEntry) {
   console.log(`Tax record saved → ${CSV_FILE}`);
 }
 
+function writeSellCsv(position, exitPrice, exitReason, pnl) {
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
+  const time = now.toISOString().slice(11, 19);
+  const mode = position.paperTrading ? "PAPER" : "LIVE";
+  const totalUSD = (position.quantity * exitPrice).toFixed(2);
+  const fee = (parseFloat(totalUSD) * 0.001).toFixed(4);
+  const notes = `${exitReason} | P&L: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}`;
+
+  const row = [
+    date, time, "BitGet", position.symbol, "SELL",
+    position.quantity, exitPrice.toFixed(2), totalUSD, fee,
+    (parseFloat(totalUSD) - parseFloat(fee)).toFixed(2),
+    position.orderId || "", mode, `"${notes}"`,
+  ].join(",");
+
+  if (!existsSync(CSV_FILE)) writeFileSync(CSV_FILE, CSV_HEADERS + "\n");
+  appendFileSync(CSV_FILE, row + "\n");
+  console.log(`Tax record saved → ${CSV_FILE}`);
+}
+
+async function postExitToSheet(position, exitPrice, exitReason, pnl) {
+  if (!SHEET_WEBHOOK) return;
+  const now = new Date();
+  const totalUSD = (position.quantity * exitPrice).toFixed(2);
+  const fee = (parseFloat(totalUSD) * 0.001).toFixed(4);
+  const payload = {
+    date: now.toISOString().slice(0, 10),
+    time: now.toISOString().slice(11, 19),
+    exchange: "BitGet",
+    symbol: position.symbol,
+    side: "SELL",
+    quantity: position.quantity,
+    price: exitPrice.toFixed(2),
+    total: totalUSD,
+    fee,
+    orderId: position.orderId || "",
+    mode: position.paperTrading ? "PAPER" : "LIVE",
+    notes: `${exitReason} | P&L: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}`,
+  };
+  try {
+    await fetch(SHEET_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    console.log("Google Sheet updated ✅");
+  } catch (err) {
+    console.log(`Google Sheet webhook failed: ${err.message}`);
+  }
+}
+
 // Tax summary command: node bot.js --tax-summary
 function generateTaxSummary() {
   if (!existsSync(CSV_FILE)) {
@@ -560,6 +631,56 @@ async function run() {
     `  Mode: ${CONFIG.paperTrading ? "📋 PAPER TRADING" : "🔴 LIVE TRADING"}`,
   );
   console.log("═══════════════════════════════════════════════════════════");
+
+  // ── Check open position (TP/SL) ─────────────────────────────────────────
+  const position = loadPosition();
+  if (position) {
+    console.log("\n── Open Position ────────────────────────────────────────\n");
+    console.log(`  Symbol:  ${position.symbol}`);
+    console.log(`  Entry:   $${position.entryPrice.toFixed(2)}`);
+    console.log(`  Size:    $${position.tradeSize.toFixed(2)}`);
+    console.log(`  TP:      $${position.tpPrice.toFixed(2)} (+${(CONFIG.takeProfitPct * 100).toFixed(1)}%)`);
+    console.log(`  SL:      $${position.slPrice.toFixed(2)} (-${(CONFIG.stopLossPct * 100).toFixed(1)}%)`);
+
+    const exitCandles = await fetchCandles(CONFIG.symbol, CONFIG.timeframe, 10);
+    const exitPrice = exitCandles[exitCandles.length - 1].close;
+    console.log(`  Current: $${exitPrice.toFixed(2)}`);
+
+    const tpHit = exitPrice >= position.tpPrice;
+    const slHit = exitPrice <= position.slPrice;
+
+    if (tpHit || slHit) {
+      const exitReason = tpHit ? "TAKE PROFIT" : "STOP LOSS";
+      const pnl = (exitPrice - position.entryPrice) * position.quantity;
+      const pnlPct = ((exitPrice - position.entryPrice) / position.entryPrice * 100).toFixed(2);
+
+      console.log(`\n  ${tpHit ? "✅" : "🛑"} ${exitReason} HIT`);
+      console.log(`  Exit:  $${exitPrice.toFixed(2)}`);
+      console.log(`  P&L:   ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)} (${pnl >= 0 ? "+" : ""}${pnlPct}%)`);
+
+      if (!position.paperTrading) {
+        try {
+          await placeBitGetOrder(CONFIG.symbol, "sell", position.tradeSize, exitPrice);
+          console.log(`  SELL order placed on BitGet ✅`);
+        } catch (err) {
+          console.log(`  ❌ SELL order failed: ${err.message}`);
+        }
+      } else {
+        console.log(`  📋 PAPER SELL — $${(position.quantity * exitPrice).toFixed(2)}`);
+      }
+
+      writeSellCsv(position, exitPrice, exitReason, pnl);
+      await postExitToSheet(position, exitPrice, exitReason, pnl);
+      clearPosition();
+    } else {
+      const distToTP = ((position.tpPrice - exitPrice) / exitPrice * 100).toFixed(2);
+      const distToSL = ((exitPrice - position.slPrice) / exitPrice * 100).toFixed(2);
+      console.log(`\n  ⏳ Holding — TP in +${distToTP}% | SL in -${distToSL}%`);
+    }
+
+    console.log("═══════════════════════════════════════════════════════════\n");
+    return;
+  }
 
   // Load strategy
   const rules = JSON.parse(readFileSync("rules.json", "utf8"));
@@ -641,6 +762,18 @@ async function run() {
       console.log(`   (Set PAPER_TRADING=false in .env to place real orders)`);
       logEntry.orderPlaced = true;
       logEntry.orderId = `PAPER-${Date.now()}`;
+      savePosition({
+        symbol: CONFIG.symbol,
+        entryPrice: price,
+        quantity: parseFloat((tradeSize / price).toFixed(6)),
+        tradeSize,
+        orderId: logEntry.orderId,
+        timestamp: logEntry.timestamp,
+        paperTrading: CONFIG.paperTrading,
+        tpPrice: price * (1 + CONFIG.takeProfitPct),
+        slPrice: price * (1 - CONFIG.stopLossPct),
+      });
+      console.log(`  TP: $${(price * (1 + CONFIG.takeProfitPct)).toFixed(2)} | SL: $${(price * (1 - CONFIG.stopLossPct)).toFixed(2)}`);
     } else {
       console.log(
         `\n🔴 PLACING LIVE ORDER — $${tradeSize.toFixed(2)} BUY ${CONFIG.symbol}`,
@@ -655,6 +788,18 @@ async function run() {
         logEntry.orderPlaced = true;
         logEntry.orderId = order.orderId;
         console.log(`✅ ORDER PLACED — ${order.orderId}`);
+        savePosition({
+          symbol: CONFIG.symbol,
+          entryPrice: price,
+          quantity: parseFloat((tradeSize / price).toFixed(6)),
+          tradeSize,
+          orderId: order.orderId,
+          timestamp: logEntry.timestamp,
+          paperTrading: CONFIG.paperTrading,
+          tpPrice: price * (1 + CONFIG.takeProfitPct),
+          slPrice: price * (1 - CONFIG.stopLossPct),
+        });
+        console.log(`  TP: $${(price * (1 + CONFIG.takeProfitPct)).toFixed(2)} | SL: $${(price * (1 - CONFIG.stopLossPct)).toFixed(2)}`);
       } catch (err) {
         console.log(`❌ ORDER FAILED — ${err.message}`);
         logEntry.error = err.message;
