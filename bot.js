@@ -103,7 +103,42 @@ const CONFIG = {
 // volume mounted at e.g. /data so trades.csv and safety-check-log.json survive
 // across cron invocations. Falls back to existing behavior when unset.
 const DATA_DIR = process.env.DATA_DIR || null;
+const SHEET_WEBHOOK = process.env.SHEET_WEBHOOK_URL || null;
 const LOG_FILE = DATA_DIR ? join(DATA_DIR, "safety-check-log.json") : "safety-check-log.json";
+
+// ─── Google Sheet Webhook ────────────────────────────────────────────────────
+
+async function postToSheet(logEntry) {
+  if (!SHEET_WEBHOOK) return;
+  const now = new Date(logEntry.timestamp);
+  const failed = logEntry.conditions
+    ? logEntry.conditions.filter((c) => !c.pass).map((c) => c.label).join("; ")
+    : "";
+  const payload = {
+    date: now.toISOString().slice(0, 10),
+    time: now.toISOString().slice(11, 19),
+    exchange: "BitGet",
+    symbol: logEntry.symbol,
+    side: logEntry.orderPlaced ? "BUY" : "",
+    quantity: logEntry.orderPlaced ? (logEntry.tradeSize / logEntry.price).toFixed(6) : "",
+    price: logEntry.price.toFixed(2),
+    total: logEntry.orderPlaced ? logEntry.tradeSize.toFixed(2) : "",
+    fee: logEntry.orderPlaced ? (logEntry.tradeSize * 0.001).toFixed(4) : "",
+    orderId: logEntry.orderId || "",
+    mode: logEntry.paperTrading ? "PAPER" : "LIVE",
+    notes: !logEntry.allPass ? `Blocked: ${failed}` : logEntry.error ? `Error: ${logEntry.error}` : "All conditions met",
+  };
+  try {
+    await fetch(SHEET_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    console.log("Google Sheet updated ✅");
+  } catch (err) {
+    console.log(`Google Sheet webhook failed: ${err.message}`);
+  }
+}
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 
@@ -634,6 +669,9 @@ async function run() {
 
   // Write tax CSV row for every run (executed, paper, or blocked)
   writeTradeCsv(logEntry);
+
+  // Post to Google Sheet
+  await postToSheet(logEntry);
 
   console.log("═══════════════════════════════════════════════════════════\n");
 }
