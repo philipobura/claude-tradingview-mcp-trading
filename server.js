@@ -378,4 +378,3 @@ app.use((req, res) => res.status(404).json({ error: "not found" }));
 app.listen(PORT, () => {
   console.log(`[server] listening on :${PORT} (DATA_DIR=${DATA_DIR}, API_KEY=${API_KEY ? "set" : "off"})`);
 });
-});
