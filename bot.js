@@ -252,7 +252,7 @@ function calcVWAP(candles) {
 
 // ─── Safety Check ───────────────────────────────────────────────────────────
 
-function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
+function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules) {
   const results = [];
 
   const check = (label, required, actual, pass) => {
@@ -264,6 +264,12 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
 
   console.log("\n── Safety Check ─────────────────────────────────────────\n");
 
+  // Volume filter — current candle must be > 50% of 20-period avg (avoids thin moves)
+  const volumes = candles.map((c) => c.volume);
+  const avgVol20 = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
+  const currentVol = volumes[volumes.length - 1];
+  const volPct = avgVol20 > 0 ? (currentVol / avgVol20) * 100 : 100;
+
   // Determine bias first
   const bullishBias = price > vwap && price > ema8;
   const bearishBias = price < vwap && price < ema8;
@@ -271,7 +277,6 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
   if (bullishBias) {
     console.log("  Bias: BULLISH — checking long entry conditions\n");
 
-    // 1. Price above VWAP
     check(
       "Price above VWAP (buyers in control)",
       `> ${vwap.toFixed(2)}`,
@@ -279,7 +284,6 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
       price > vwap,
     );
 
-    // 2. Price above EMA(8)
     check(
       "Price above EMA(8) (uptrend confirmed)",
       `> ${ema8.toFixed(2)}`,
@@ -287,15 +291,14 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
       price > ema8,
     );
 
-    // 3. RSI(3) pullback
+    // Tightened: 35 → 25 — require deeper pullback for stronger snap-back signal
     check(
-      "RSI(3) below 30 (snap-back setup in uptrend)",
-      "< 30",
+      "RSI(3) below 25 (deep pullback in uptrend)",
+      "< 25",
       rsi3.toFixed(2),
-      rsi3 < 30,
+      rsi3 < 25,
     );
 
-    // 4. Not overextended from VWAP
     const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
     check(
       "Price within 1.5% of VWAP (not overextended)",
@@ -303,8 +306,15 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
       `${distFromVWAP.toFixed(2)}%`,
       distFromVWAP < 1.5,
     );
+
+    check(
+      "Volume above 50% of 20-period average (conviction)",
+      "> 50%",
+      `${volPct.toFixed(0)}%`,
+      avgVol20 === 0 || currentVol > avgVol20 * 0.5,
+    );
   } else if (bearishBias) {
-    console.log("  Bias: BEARISH — checking short entry conditions\n");
+    console.log("  Bias: BEARISH — checking reversal entry conditions\n");
 
     check(
       "Price below VWAP (sellers in control)",
@@ -320,11 +330,12 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
       price < ema8,
     );
 
+    // Tightened: 65 → 80 — require extreme overbought for counter-trend entry
     check(
-      "RSI(3) above 70 (reversal setup in downtrend)",
-      "> 70",
+      "RSI(3) above 80 (extreme overbought reversal setup)",
+      "> 80",
       rsi3.toFixed(2),
-      rsi3 > 70,
+      rsi3 > 80,
     );
 
     const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
@@ -333,6 +344,13 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
       "< 1.5%",
       `${distFromVWAP.toFixed(2)}%`,
       distFromVWAP < 1.5,
+    );
+
+    check(
+      "Volume above 50% of 20-period average (conviction)",
+      "> 50%",
+      `${volPct.toFixed(0)}%`,
+      avgVol20 === 0 || currentVol > avgVol20 * 0.5,
     );
   } else {
     console.log("  Bias: NEUTRAL — no clear direction. No trade.\n");
@@ -717,7 +735,7 @@ async function run() {
   }
 
   // Run safety check
-  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, rules);
+  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, candles, rules);
 
   // Calculate position size
   const tradeSize = Math.min(
