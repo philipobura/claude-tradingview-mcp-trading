@@ -1,17 +1,19 @@
 {
   "watchlist": ["BTCUSDT"],
-  "default_timeframe": "1m",
+  "default_timeframe": "5m",
 
   "strategy": {
     "name": "VWAP + RSI(3) + EMA(8) Scalping Strategy",
     "sources": ["Lewis Jackson"],
-    "description": "Three indicators, each doing a different job. EMA(8) for trend direction, VWAP for session bias, RSI(3) for entry timing. All three must align before a trade fires."
+    "description": "Three indicators, each doing a different job. EMA(8) for trend direction, VWAP for session bias, RSI(3) for entry timing. All three must align before a trade fires.",
+    "last_tuned": "2026-05-14"
   },
 
   "indicators": {
     "ema_8": "Trend direction. Price above EMA(8) = bullish momentum. Below = bearish.",
     "vwap": "Session bias. Price above VWAP = buyers in control. Below = sellers. Resets at midnight UTC.",
-    "rsi_3": "Entry timing. RSI on 3 candles only — extremely sensitive. Below 30 in an uptrend = snap-back setup. Above 70 in a downtrend = reversal likely."
+    "rsi_3": "Entry timing. RSI on 3 candles only — extremely sensitive. Below 25 in an uptrend = deep pullback, strong snap-back setup. Above 80 in a downtrend = extreme overbought, reversal likely.",
+    "volume": "Conviction filter. Current candle volume must exceed 50% of the 20-period average. Uses last completed candle to avoid Binance's near-zero reading on forming candles."
   },
 
   "bias_criteria": {
@@ -23,27 +25,47 @@
     "long": [
       "Price is above VWAP — buyers in control for the session",
       "Price is above EMA(8) — uptrend confirmed",
-      "RSI(3) has dropped below 30 — short-term pullback in an uptrend, snap-back likely"
+      "RSI(3) has dropped below 25 — deep pullback in an uptrend, snap-back likely",
+      "Price is within 1.5% of VWAP — not overextended",
+      "Volume exceeds 50% of 20-period average — move has conviction"
     ],
     "short": [
       "Price is below VWAP — sellers in control",
       "Price is below EMA(8) — downtrend confirmed",
-      "RSI(3) has spiked above 70 — overbought in a downtrend, reversal likely"
+      "RSI(3) has spiked above 80 — extreme overbought in a downtrend, reversal likely",
+      "Price is within 1.5% of VWAP — not overextended",
+      "Volume exceeds 50% of 20-period average — move has conviction"
     ]
   },
 
   "exit_rules": [
-    "Exit when RSI(3) crosses back above 50 (for longs) or below 50 (for shorts)",
-    "Hard stop: 0.3% below entry for longs, 0.3% above entry for shorts",
-    "Take profit at next VWAP touch or EMA(8) cross"
+    "Take profit: +1.5% above entry price",
+    "Stop loss: -0.75% below entry price",
+    "Risk/reward ratio: 2:1"
   ],
 
   "risk_rules": [
     "Risk maximum 1% of portfolio per trade",
-    "Maximum trade size capped by MAX_TRADE_SIZE_USD in .env",
-    "Maximum trades per day capped by MAX_TRADES_PER_DAY in .env",
+    "Maximum trade size capped by MAX_TRADE_SIZE_USD env var",
+    "Maximum trades per day capped by MAX_TRADES_PER_DAY env var",
     "Do not trade if price is more than 1.5% away from VWAP — overextended",
     "Paper trade first — validate this strategy on your specific asset before going live"
+  ],
+
+  "tuning_history": [
+    {
+      "date": "2026-05-14",
+      "changes": [
+        "RSI long threshold tightened: < 30 → < 25 (require deeper pullback)",
+        "RSI short threshold tightened: > 70 → > 80 (require extreme overbought)",
+        "Exit changed from dynamic RSI/VWAP-based to fixed percentage TP/SL",
+        "Take profit raised: 1.0% → 1.5%",
+        "Stop loss widened: 0.3% → 0.75% (prior SL exits were within normal 5m noise)",
+        "Volume filter added: > 50% of 20-period average",
+        "1.5% VWAP distance check formalised as entry condition"
+      ],
+      "rationale": "5 of 6 closed trades hit SL within 0.52-0.61%, just past the 0.5% threshold — within normal 5m noise. Tighter RSI thresholds require stronger setups before entry. Volume filter removes low-conviction moves."
+    }
   ],
 
   "notes": "Scalping strategy — designed for 1m to 5m timeframes. RSI(3) is intentionally fast and sensitive. Do not apply to higher timeframes."
