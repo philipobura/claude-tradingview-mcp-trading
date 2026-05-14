@@ -108,6 +108,23 @@ const DATA_DIR = process.env.DATA_DIR || null;
 const SHEET_WEBHOOK = process.env.SHEET_WEBHOOK_URL || null;
 const LOG_FILE = DATA_DIR ? join(DATA_DIR, "safety-check-log.json") : "safety-check-log.json";
 const POSITION_FILE = DATA_DIR ? join(DATA_DIR, "position.json") : "position.json";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || null;
+
+// ─── Telegram Alerts ─────────────────────────────────────────────────────────
+
+async function sendTelegram(text) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: "Markdown" }),
+    });
+  } catch (err) {
+    console.log(`[telegram] alert failed: ${err.message}`);
+  }
+}
 
 // ─── Google Sheet Webhook ────────────────────────────────────────────────────
 
@@ -690,6 +707,13 @@ async function run() {
 
       writeSellCsv(position, exitPrice, exitReason, pnl);
       await postExitToSheet(position, exitPrice, exitReason, pnl);
+      const pnlSign = pnl >= 0 ? "+" : "";
+      await sendTelegram(
+        `${tpHit ? "✅" : "🛑"} *${exitReason} — ${position.symbol}*\n` +
+        `Entry: $${position.entryPrice.toFixed(2)} → Exit: $${exitPrice.toFixed(2)}\n` +
+        `P&L: ${pnlSign}$${pnl.toFixed(4)} (${pnlSign}${pnlPct}%)\n` +
+        `Mode: ${position.paperTrading ? "PAPER" : "LIVE"}`
+      );
       clearPosition();
     } else {
       const distToTP = ((position.tpPrice - exitPrice) / exitPrice * 100).toFixed(2);
@@ -737,6 +761,26 @@ async function run() {
 
   // Run safety check
   const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, candles, rules);
+
+  // Near-entry alert: RSI is the only failing condition and within 5 points of threshold
+  if (!allPass) {
+    const failing = results.filter((r) => !r.pass);
+    const onlyRsiFailing = failing.length === 1 && failing[0].label.startsWith("RSI");
+    if (onlyRsiFailing) {
+      const bullishBias = price > vwap && price > ema8;
+      const nearThreshold = bullishBias ? rsi3 < 30 : rsi3 > 75;
+      if (nearThreshold) {
+        const bias = bullishBias ? "LONG" : "SHORT";
+        const threshold = bullishBias ? "< 25" : "> 80";
+        await sendTelegram(
+          `⚠️ *Near Entry — ${CONFIG.symbol}*\n` +
+          `Bias: ${bias} | RSI(3): ${rsi3.toFixed(1)} (need ${threshold})\n` +
+          `Price: $${price.toFixed(2)} | EMA(8): $${ema8.toFixed(2)} | VWAP: $${vwap.toFixed(2)}\n` +
+          `_All other conditions pass — watching for RSI_`
+        );
+      }
+    }
+  }
 
   // Calculate position size
   const tradeSize = Math.min(
@@ -793,6 +837,12 @@ async function run() {
         slPrice: price * (1 - CONFIG.stopLossPct),
       });
       console.log(`  TP: $${(price * (1 + CONFIG.takeProfitPct)).toFixed(2)} | SL: $${(price * (1 - CONFIG.stopLossPct)).toFixed(2)}`);
+      await sendTelegram(
+        `📋 *PAPER BUY — ${CONFIG.symbol}*\n` +
+        `Price: $${price.toFixed(2)} | Size: $${tradeSize.toFixed(2)}\n` +
+        `TP: $${(price * (1 + CONFIG.takeProfitPct)).toFixed(2)} (+${(CONFIG.takeProfitPct * 100).toFixed(1)}%) | SL: $${(price * (1 - CONFIG.stopLossPct)).toFixed(2)} (-${(CONFIG.stopLossPct * 100).toFixed(1)}%)\n` +
+        `RSI(3): ${rsi3.toFixed(1)} | VWAP: $${vwap.toFixed(2)}`
+      );
     } else {
       console.log(
         `\n🔴 PLACING LIVE ORDER — $${tradeSize.toFixed(2)} BUY ${CONFIG.symbol}`,
@@ -819,6 +869,12 @@ async function run() {
           slPrice: price * (1 - CONFIG.stopLossPct),
         });
         console.log(`  TP: $${(price * (1 + CONFIG.takeProfitPct)).toFixed(2)} | SL: $${(price * (1 - CONFIG.stopLossPct)).toFixed(2)}`);
+        await sendTelegram(
+          `🔴 *LIVE BUY — ${CONFIG.symbol}*\n` +
+          `Order: ${order.orderId}\n` +
+          `Price: $${price.toFixed(2)} | Size: $${tradeSize.toFixed(2)}\n` +
+          `TP: $${(price * (1 + CONFIG.takeProfitPct)).toFixed(2)} (+${(CONFIG.takeProfitPct * 100).toFixed(1)}%) | SL: $${(price * (1 - CONFIG.stopLossPct)).toFixed(2)} (-${(CONFIG.stopLossPct * 100).toFixed(1)}%)`
+        );
       } catch (err) {
         console.log(`❌ ORDER FAILED — ${err.message}`);
         logEntry.error = err.message;
