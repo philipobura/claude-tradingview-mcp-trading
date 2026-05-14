@@ -31,6 +31,8 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 const API_KEY = process.env.API_KEY || null;
 const CRON_SPEC = process.env.CRON_SPEC || "*/5 * * * *";
 const SYMBOL = process.env.SYMBOL || "BTCUSDT";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || null;
 
 const TRADES_CSV = join(DATA_DIR, "trades.csv");
 const LOG_FILE = join(DATA_DIR, "safety-check-log.json");
@@ -91,6 +93,86 @@ function runBot(reason = "cron") {
 runBot("startup");
 cron.schedule(CRON_SPEC, () => runBot("cron"), { timezone: "UTC" });
 console.log(`[scheduler] cron registered: "${CRON_SPEC}" (UTC)`);
+
+// Daily digest at midnight UTC
+cron.schedule("0 0 * * *", () => sendTelegramDigest("daily"), { timezone: "UTC" });
+console.log(`[scheduler] daily Telegram digest registered: 00:00 UTC`);
+
+// Weekly digest every Monday at 00:05 UTC
+cron.schedule("5 0 * * 1", () => sendTelegramDigest("weekly"), { timezone: "UTC" });
+console.log(`[scheduler] weekly Telegram digest registered: Monday 00:05 UTC`);
+
+// ─── Telegram ────────────────────────────────────────────────────────────────
+
+async function sendTelegram(text) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: "Markdown" }),
+    });
+  } catch (err) {
+    console.error(`[telegram] send failed: ${err.message}`);
+  }
+}
+
+async function sendTelegramDigest(period = "daily") {
+  if (!existsSync(TRADES_CSV)) return;
+  const lines = readFileSync(TRADES_CSV, "utf8").trim().split("\n");
+  const rows = lines.slice(1).map(parseCSVLine).filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r[0]));
+
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+
+  const targetDate = period === "daily" ? yesterday : null;
+
+  const inRange = (r) => period === "daily"
+    ? r[0] === targetDate
+    : r[0] >= weekAgo && r[0] <= today;
+
+  const periodRows = rows.filter(inRange);
+  const executed = periodRows.filter((r) => r[11] === "PAPER" || r[11] === "LIVE");
+  const blocked = periodRows.filter((r) => r[11] === "BLOCKED");
+
+  const buys = executed.filter((r) => r[4] === "BUY");
+  const sells = executed.filter((r) => r[4] === "SELL");
+
+  const wins = sells.filter((r) => (r[12] || "").includes("TAKE PROFIT"));
+  const losses = sells.filter((r) => (r[12] || "").includes("STOP LOSS"));
+
+  const pnlTotal = sells.reduce((sum, r) => {
+    const match = (r[12] || "").match(/P&L: ([+-]?\$[\d.]+)/);
+    if (!match) return sum;
+    return sum + parseFloat(match[1].replace("$", ""));
+  }, 0);
+
+  const winRate = sells.length > 0 ? ((wins.length / sells.length) * 100).toFixed(0) : "—";
+  const label = period === "daily" ? `📅 *Daily Report — ${targetDate}*` : `📆 *Weekly Report — ${weekAgo} → ${today}*`;
+
+  const msg = [
+    label,
+    ``,
+    `🤖 Symbol: ${SYMBOL} | Mode: PAPER`,
+    ``,
+    `📊 *Decisions*`,
+    `  Trades entered:  ${buys.length}`,
+    `  Trades closed:   ${sells.length}`,
+    `  Blocked:         ${blocked.length}`,
+    ``,
+    `🏆 *Results*`,
+    `  ✅ Take profits: ${wins.length}`,
+    `  🛑 Stop losses:  ${losses.length}`,
+    `  Win rate:        ${winRate}%`,
+    `  Net P&L:         ${pnlTotal >= 0 ? "+" : ""}$${pnlTotal.toFixed(4)}`,
+    ``,
+    `🔗 Full log: /api/trades/download`,
+  ].join("\n");
+
+  await sendTelegram(msg);
+  console.log(`[telegram] ${period} digest sent`);
+}
 
 // ─── CSV parser (handles quoted Notes field) ────────────────────────────────
 
@@ -364,6 +446,12 @@ app.get("/api/run-now", requireKey, (req, res) => {
   if (runInFlight) return res.status(429).json({ ok: false, error: "run already in flight" });
   runBot("manual");
   res.json({ ok: true, started: true });
+});
+
+app.get("/api/report/send", requireKey, async (req, res) => {
+  const period = req.query.period === "weekly" ? "weekly" : "daily";
+  await sendTelegramDigest(period);
+  res.json({ ok: true, sent: period });
 });
 
 app.get("/api/trades/download", requireKey, (req, res) => {
