@@ -1,5 +1,5 @@
 # PROJECT AUDIT — Claude Trading Bot
-**Last updated:** 2026-05-14  
+**Last updated:** 2026-05-14 (Telegram digest)  
 **Audited by:** Claude Code
 
 ---
@@ -37,6 +37,7 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 | `GET /api/log` | Raw safety-check decision log as JSON |
 | `GET /api/trades/download` | Download `trades.csv` directly from Railway volume |
 | `GET /api/run-now` | Trigger an immediate bot run |
+| `GET /api/report/send` | Trigger Telegram digest now (`?period=daily` or `?period=weekly`) |
 
 ---
 
@@ -67,6 +68,13 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - Railway GraphQL API used to clear the `cronSchedule` field server-side (`serviceInstanceUpdate` mutation) — railway.json alone was insufficient.
 - Service confirmed running as always-on web service. Health endpoint verified live.
 
+### 2026-05-14 — Telegram Daily/Weekly Digest (`3744b7e`)
+- `sendTelegram()` and `sendTelegramDigest()` added to `server.js`.
+- **Daily digest:** fires automatically at midnight UTC — covers trades entered, closed, win rate, net P&L, and blocked count for the previous day.
+- **Weekly digest:** fires every Monday at 00:05 UTC — same format, covers the rolling 7-day window.
+- **Manual trigger:** `GET /api/report/send?period=daily|weekly` — fires the digest on demand.
+- Controlled by `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` env vars; silently no-ops when unset.
+
 ### 2026-05-14 — Strategy Tuning to Improve Win Rate (`0158e84`)
 - **RSI long threshold:** `< 35` → `< 25` — requires a deeper pullback before entering long.
 - **RSI reversal threshold:** `> 65` → `> 80` — counter-trend entries only on extreme RSI exhaustion.
@@ -90,6 +98,8 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 | `PORTFOLIO_VALUE_USD` | `500` | Portfolio size for position sizing |
 | `MAX_TRADE_SIZE_USD` | `50` | Hard cap per trade |
 | `MAX_TRADES_PER_DAY` | `3` | Daily trade limit |
+| `TELEGRAM_BOT_TOKEN` | *(set)* | Telegram bot token for digest messages |
+| `TELEGRAM_CHAT_ID` | `204857812` | Telegram chat ID to deliver digests to |
 
 ---
 
@@ -175,3 +185,4 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - [ ] Fix `computeSummary` in `server.js` — net BUY/SELL quantities instead of summing all executions
 - [ ] Consider `MAX_HOLD_HOURS` fallback exit for positions that never hit TP or SL
 - [ ] Review RSI = 0/100 anomaly at session open — add minimum session candle count guard
+- [x] Telegram daily/weekly digest — live as of 2026-05-14
