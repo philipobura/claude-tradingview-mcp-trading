@@ -264,10 +264,11 @@ function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules) {
 
   console.log("\n── Safety Check ─────────────────────────────────────────\n");
 
-  // Volume filter — current candle must be > 50% of 20-period avg (avoids thin moves)
+  // Volume filter — use the last COMPLETED candle (index -2) since the current
+  // candle (index -1) is still forming and often has near-zero volume on Binance.
   const volumes = candles.map((c) => c.volume);
-  const avgVol20 = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
-  const currentVol = volumes[volumes.length - 1];
+  const avgVol20 = volumes.slice(-22, -2).reduce((a, b) => a + b, 0) / 20;
+  const currentVol = volumes[volumes.length - 2];
   const volPct = avgVol20 > 0 ? (currentVol / avgVol20) * 100 : 100;
 
   // Determine bias first
