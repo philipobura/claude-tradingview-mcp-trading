@@ -1,5 +1,5 @@
 # PROJECT AUDIT — Claude Trading Bot
-**Last updated:** 2026-05-14 (Telegram digest)  
+**Last updated:** 2026-05-14 (volume filter fix)  
 **Audited by:** Claude Code
 
 ---
@@ -74,6 +74,11 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - **Weekly digest:** fires every Monday at 00:05 UTC — same format, covers the rolling 7-day window.
 - **Manual trigger:** `GET /api/report/send?period=daily|weekly` — fires the digest on demand.
 - Controlled by `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` env vars; silently no-ops when unset.
+
+### 2026-05-14 — Volume Filter Fix (`e9390a0`)
+- Volume filter was reading 0% on every run because it was comparing the current live (still-forming) candle's volume, which Binance returns as near-zero at the start of each 5m window.
+- Fixed by using the last **completed** candle (`index -2`) for both the current volume reading and the 20-period average baseline (`slice(-22, -2)`).
+- Volume now reads correctly — confirmed at 97% and 248% on subsequent runs.
 
 ### 2026-05-14 — Strategy Tuning to Improve Win Rate (`0158e84`)
 - **RSI long threshold:** `< 35` → `< 25` — requires a deeper pullback before entering long.
@@ -186,3 +191,4 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - [ ] Consider `MAX_HOLD_HOURS` fallback exit for positions that never hit TP or SL
 - [ ] Review RSI = 0/100 anomaly at session open — add minimum session candle count guard
 - [x] Telegram daily/weekly digest — live as of 2026-05-14
+- [x] Volume filter 0% bug fixed — live as of 2026-05-14
