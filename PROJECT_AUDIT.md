@@ -1,12 +1,12 @@
 # PROJECT AUDIT — Claude Trading Bot
-**Last updated:** 2026-05-13  
+**Last updated:** 2026-05-14  
 **Audited by:** Claude Code
 
 ---
 
 ## Project Overview
 
-Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, runs a VWAP + RSI(3) + EMA(8) safety check against `rules.json`, and executes trades on BitGet. Runs on a 5-minute cron. Currently in **Paper Trading mode**.
+Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, runs a VWAP + RSI(3) + EMA(8) safety check against `rules.json`, and executes trades on BitGet. Runs as an always-on Express server (`server.js`) with an internal 5-minute cron. Currently in **Paper Trading mode**.
 
 ---
 
@@ -17,126 +17,161 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 | Platform | Railway |
 | Project | claude-trading-bot |
 | Service | claude-trading-bot |
+| Service URL | `https://claude-trading-bot-production-750c.up.railway.app` |
 | Region | us-west2 |
-| Cron | every 5 minutes (changed from 4H on 2026-05-11) |
+| Service type | Always-on web service (converted from cron on 2026-05-14) |
+| Internal cron | every 5 minutes via `node-cron` inside `server.js` |
 | Start command | `node server.js` |
 | Restart policy | ON_FAILURE (max 3 retries) |
 | Volume mount | `/data` — persists `position.json`, `trades.csv`, `safety-check-log.json` |
 
 ---
 
+## HTTP API Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/health` | Service health, last run status, volume mount check |
+| `GET /api/summary` | Full bot summary — live price, indicators, all-time stats |
+| `GET /api/trades` | Parsed trade log as JSON (`?limit=N`) |
+| `GET /api/log` | Raw safety-check decision log as JSON |
+| `GET /api/trades/download` | Download `trades.csv` directly from Railway volume |
+| `GET /api/run-now` | Trigger an immediate bot run |
+
+---
+
 ## Changes Made (Post-Initial Build)
 
 ### 2026-05-11 — DATA_DIR Persistence + Cron Fix (`4d156eb`, `f1d9700`)
-- Added `DATA_DIR` env var support so `trades.csv` and `safety-check-log.json` survive Railway container restarts between cron runs.
-- `POSITION_FILE`, `LOG_FILE`, and `CSV_FILE` now resolve to `DATA_DIR` when set.
-- Changed Railway cron from `0 */4 * * *` (every 4H) to `*/5 * * * *` (every 5 minutes) in `railway.json`.
+- Added `DATA_DIR` env var so `trades.csv`, `position.json`, and `safety-check-log.json` survive Railway container restarts.
+- Changed Railway cron from `0 */4 * * *` (every 4H) to `*/5 * * * *` (every 5 minutes).
 - Added Binance mirror fallback for candle fetching and RSI null-check fix.
 
 ### 2026-05-12 — Google Sheets Webhook Integration (`815d1d2`)
-- Added `postToSheet()` function — posts every trade decision (blocked or executed) to a Google Sheet via webhook POST.
+- `postToSheet()` posts every trade decision (blocked or executed) to a Google Sheet via webhook POST.
 - Controlled by `SHEET_WEBHOOK_URL` env var; silently no-ops when unset.
-- Payload includes: date, time, exchange, symbol, side, quantity, price, total, fee, order ID, mode (PAPER/LIVE), notes.
 - Added `"type": "module"` to `package.json` to suppress Node.js ESM warning.
 
 ### 2026-05-12 — Take Profit & Stop Loss Exit Logic (`a0d9e73`)
-- **Position tracking:** Open position now saved to `position.json` on entry, cleared on exit. Persists across cron runs via `DATA_DIR` volume mount.
-- **TP/SL check runs first:** On every cron tick, bot loads `position.json` before evaluating new entries. If a position is open, it checks TP/SL and skips the entry logic entirely.
-- **TP:** +1.0% above entry price (configurable via `TAKE_PROFIT_PCT` env var)
-- **SL:** -0.5% below entry price (configurable via `STOP_LOSS_PCT` env var)
-- **Risk/reward:** 2:1
-- **On exit:** Logs SELL row to `trades.csv`, posts exit event to Google Sheet (with P&L), clears `position.json`.
-- **Paper mode:** Prints `📋 PAPER SELL` with P&L; skips BitGet API call.
-- **Live mode:** Places a market SELL order on BitGet on TP/SL trigger.
+- Open position saved to `position.json` on entry, cleared on exit. Persists via `DATA_DIR`.
+- TP/SL check runs first on every cron tick — skips entry logic if position is open.
+- TP and SL configurable via `TAKE_PROFIT_PCT` and `STOP_LOSS_PCT` env vars.
+- On exit: logs SELL row to `trades.csv`, posts to Google Sheet with P&L, clears `position.json`.
 
-### 2026-05-13 — Timeframe Variable Update (today)
-- Set `TIMEFRAME=5m` via `railway variables --set` before deploying.
-- Redeployed with `railway up --detach`.
+### 2026-05-13 — Timeframe + Always-On Server (`server.js` committed, `3b92510`)
+- `server.js` committed and deployed — replaces Railway's cron-type service with an always-on Express web server that runs `bot.js` internally via `node-cron`.
+- Added `GET /api/trades/download` endpoint to serve `trades.csv` directly from the Railway volume.
+- Fixed stray `});` syntax error in `server.js` that was crashing startup (`d887c23`).
+
+### 2026-05-14 — Service Type Fix (cron → always-on)
+- Railway GraphQL API used to clear the `cronSchedule` field server-side (`serviceInstanceUpdate` mutation) — railway.json alone was insufficient.
+- Service confirmed running as always-on web service. Health endpoint verified live.
+
+### 2026-05-14 — Strategy Tuning to Improve Win Rate (`0158e84`)
+- **RSI long threshold:** `< 35` → `< 25` — requires a deeper pullback before entering long.
+- **RSI reversal threshold:** `> 65` → `> 80` — counter-trend entries only on extreme RSI exhaustion.
+- **Volume filter added:** current candle volume must exceed 50% of 20-period average — filters low-conviction moves.
+- **Stop loss widened:** `0.5%` → `0.75%` — 3 of 5 prior SL exits were between 0.52–0.61%, within normal 5m noise.
+- **Take profit raised:** `1.0%` → `1.5%` — maintains 2:1 R:R with the wider SL.
 
 ---
 
-## New Environment Variables Added
+## Environment Variables (Full)
 
-| Variable | Default | Description |
+| Variable | Current Value | Description |
 |---|---|---|
-| `TAKE_PROFIT_PCT` | `1.0` | Take profit % above entry |
-| `STOP_LOSS_PCT` | `0.5` | Stop loss % below entry |
-| `SHEET_WEBHOOK_URL` | *(unset)* | Google Sheets webhook endpoint |
-| `DATA_DIR` | *(unset)* | Path for persistent volume (Railway: `/data`) |
-| `TIMEFRAME` | `4H` | Chart timeframe — currently set to `5m` |
+| `TAKE_PROFIT_PCT` | `1.5` | Take profit % above entry |
+| `STOP_LOSS_PCT` | `0.75` | Stop loss % below entry |
+| `SHEET_WEBHOOK_URL` | *(set)* | Google Sheets webhook endpoint |
+| `DATA_DIR` | `/data` | Persistent volume path on Railway |
+| `TIMEFRAME` | `5m` | Chart timeframe |
+| `SYMBOL` | `BTCUSDT` | Trading pair |
+| `PAPER_TRADING` | `true` | Paper mode — no real orders placed |
+| `PORTFOLIO_VALUE_USD` | `500` | Portfolio size for position sizing |
+| `MAX_TRADE_SIZE_USD` | `50` | Hard cap per trade |
+| `MAX_TRADES_PER_DAY` | `3` | Daily trade limit |
 
 ---
 
-## New Files Added
+## Files (Runtime)
 
 | File | Location | Purpose |
 |---|---|---|
-| `position.json` | `DATA_DIR` or project root | Tracks open position across cron runs |
+| `position.json` | `/data/position.json` | Tracks open position across cron runs |
+| `trades.csv` | `/data/trades.csv` | Full trade log (BUY, SELL, BLOCKED rows) |
+| `safety-check-log.json` | `/data/safety-check-log.json` | Decision log with indicator values per run |
 
 ---
 
-## Current Live Status (2026-05-13)
+## Paper Trading Performance (All Closed Trades to Date)
 
-| Field | Value |
-|---|---|
-| Mode | Paper Trading |
-| Symbol | BTCUSDT |
-| Timeframe | 5m |
-| Trades today | 2 / 3 |
-| Google Sheet sync | ✅ Active |
+| Date | Entry | Exit | Reason | P&L |
+|---|---|---|---|---|
+| 2026-05-12 | $80,690 | $80,245 | Stop Loss | -$0.03 |
+| 2026-05-12 | $80,390 | $79,972 | Stop Loss | -$0.03 |
+| 2026-05-12 | $80,108 | $80,920 | **Take Profit** ✅ | **+$0.05** |
+| 2026-05-13 | $81,060 | $80,567 | Stop Loss | -$0.03 |
+| 2026-05-13 | $80,637 | $80,219 | Stop Loss | -$0.03 |
+| 2026-05-13 | $80,252 | $79,789 | Stop Loss | -$0.03 |
 
-### Trade 1 (closed)
-| Field | Value |
-|---|---|
-| Side | LONG |
-| Entry | $81,060.01 |
-| Exit | $80,567.29 |
-| Reason | Stop Loss hit |
-| P&L | -$0.03 (-0.61%) |
+**Win rate:** 1/6 = 17% | **Net P&L:** -$0.09 (price) / -$0.15 (incl. fees)  
+**Capital at risk:** $30 (6 × $5 trades) | **Return:** -0.5%  
+**Break-even win rate at 2:1 R:R:** 33%
 
-### Trade 2 (open as of last log ~11:35 UTC)
-| Field | Value |
-|---|---|
-| Side | LONG |
-| Entry | $80,637.35 |
-| Size | $5.00 |
-| Take Profit | $81,443.72 (+1.0%) |
-| Stop Loss | $80,234.16 (-0.5%) |
-| Last price | $80,663.47 |
-| Status | ⏳ Holding |
+*Note: 6 trades is insufficient sample size for statistical conclusions. Minimum 30 trades required.*
 
 ---
 
-## Strategy (unchanged)
+## Current Strategy (Post-Tuning)
 
 **VWAP + RSI(3) + EMA(8) Scalping** — defined in `rules.json`
 
 **Bullish entry (all must pass):**
 - Price above VWAP
 - Price above EMA(8)
-- RSI(3) below 30 (pullback in uptrend)
+- RSI(3) below **25** *(tightened from 35)*
 - Price within 1.5% of VWAP
+- Volume > 50% of 20-period average *(new)*
 
-**Bearish entry (all must pass):**
+**Bearish reversal entry (all must pass):**
 - Price below VWAP
 - Price below EMA(8)
-- RSI(3) above 65 (bounce in downtrend)
+- RSI(3) above **80** *(tightened from 65)*
 - Price within 1.5% of VWAP
+- Volume > 50% of 20-period average *(new)*
+
+**Exit rules:**
+- Take Profit: +1.5% above entry *(raised from 1.0%)*
+- Stop Loss: -0.75% below entry *(widened from 0.5%)*
+- Risk/reward: 2:1
 
 ---
 
 ## Known Behaviours / Observations
 
-- RSI(3) occasionally reads `0` — RSI null-check fix applied (May 11) but worth monitoring.
-- `railway logs` cannot be piped or captured non-interactively (requires TTY). Use Railway dashboard or terminal directly.
-- Bot restarts container on each cron tick (`Mounting volume... Starting Container` visible in logs) — this is normal Railway behaviour for cron services, not a crash loop.
-- `safety-check-log.json` in the local repo is stale (last local write: 2026-05-12). Live logs are written to `/data/safety-check-log.json` on the Railway volume.
+- RSI(3) occasionally reads `0` or `100` at session open — RSI null-check applied but still observed. Monitor.
+- `railway logs` requires a TTY and cannot be piped. Use Railway dashboard or terminal directly.
+- `safety-check-log.json` in local repo is stale. Live copy is at `/data/safety-check-log.json` on Railway volume.
+- The `computeSummary` function in `server.js` double-counts BUY + SELL quantities — `totalSpentUSD` and `quantityBTC` in `/api/summary` are inflated. Use `/api/trades/download` for accurate P&L.
+- Trade frequency will drop with tighter RSI thresholds — this is intentional.
+
+---
+
+## How to Measure Strategy Improvement
+
+| Metric | Target | Where to Check |
+|---|---|---|
+| Win rate | > 33% (break-even) | `/api/trades/download` |
+| Avg loss size | ~$0.04 | trades.csv SELL rows |
+| Avg win size | ~$0.08 | trades.csv SELL rows |
+| RSI at entry (longs) | < 20 on winners | `/api/log` |
+| Sample size | ≥ 30 trades | trades.csv row count |
 
 ---
 
 ## Recommended Next Steps
 
-- [ ] Monitor Trade 2 — price approaching SL zone (~$80,234)
-- [ ] Confirm `SHEET_WEBHOOK_URL` is set in Railway env vars (Google Sheet updates showing ✅ in logs, so it is active)
-- [ ] Consider adding a `MAX_HOLD_HOURS` fallback exit in case TP/SL are never triggered on a slow 5m candle
-- [ ] Review RSI(3) = 0 anomaly — may need a minimum candle count guard before RSI calculation
+- [ ] Run 30+ paper trades before drawing conclusions on the tuned strategy
+- [ ] Fix `computeSummary` in `server.js` — net BUY/SELL quantities instead of summing all executions
+- [ ] Consider `MAX_HOLD_HOURS` fallback exit for positions that never hit TP or SL
+- [ ] Review RSI = 0/100 anomaly at session open — add minimum session candle count guard
