@@ -1,5 +1,5 @@
 # PROJECT AUDIT — Claude Trading Bot
-**Last updated:** 2026-05-14 (volume filter fix)  
+**Last updated:** 2026-05-14 (Telegram trade alerts)  
 **Audited by:** Claude Code
 
 ---
@@ -80,6 +80,12 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - Fixed by using the last **completed** candle (`index -2`) for both the current volume reading and the 20-period average baseline (`slice(-22, -2)`).
 - Volume now reads correctly — confirmed at 97% and 248% on subsequent runs.
 
+### 2026-05-14 — Telegram Trade Alerts (`bd2be8c`)
+- `sendTelegram()` helper added to `bot.js` (reads same `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` env vars already set on Railway).
+- **BUY alert:** fires on every paper or live trade entry — shows price, size, TP, SL, RSI(3).
+- **TP/SL exit alert:** fires when a position closes — shows entry→exit price and P&L $ and %.
+- **Near-entry alert:** fires when RSI is the only failing condition and within 5 points of the threshold (e.g. RSI = 27 when threshold is < 25) — early warning before the bot triggers.
+
 ### 2026-05-14 — Strategy Tuning to Improve Win Rate (`0158e84`)
 - **RSI long threshold:** `< 35` → `< 25` — requires a deeper pullback before entering long.
 - **RSI reversal threshold:** `> 65` → `> 80` — counter-trend entries only on extreme RSI exhaustion.
@@ -129,11 +135,11 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 | 2026-05-13 | $80,637 | $80,219 | Stop Loss | -$0.03 |
 | 2026-05-13 | $80,252 | $79,789 | Stop Loss | -$0.03 |
 
-**Win rate:** 1/6 = 17% | **Net P&L:** -$0.09 (price) / -$0.15 (incl. fees)  
+**Win rate:** 1/6 = 17% (closed trades only) | **Net P&L:** -$0.09 (price) / -$0.15 (incl. fees)  
 **Capital at risk:** $30 (6 × $5 trades) | **Return:** -0.5%  
 **Break-even win rate at 2:1 R:R:** 33%
 
-*Note: 6 trades is insufficient sample size for statistical conclusions. Minimum 30 trades required.*
+*Note: 14 total paper trades executed as of 2026-05-14 (incl. 2 open/in-progress today). Closed trade count above reflects confirmed exits only. Minimum 30 closed trades required for statistical conclusions.*
 
 ---
 
@@ -192,3 +198,4 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - [ ] Review RSI = 0/100 anomaly at session open — add minimum session candle count guard
 - [x] Telegram daily/weekly digest — live as of 2026-05-14
 - [x] Volume filter 0% bug fixed — live as of 2026-05-14
+- [x] Telegram trade alerts (BUY entry, TP/SL exit, near-entry warning) — live as of 2026-05-14
