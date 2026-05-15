@@ -33,6 +33,7 @@ const CRON_SPEC = process.env.CRON_SPEC || "*/5 * * * *";
 const SYMBOL = process.env.SYMBOL || "BTCUSDT";
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || null;
+const WEBHOOK_URL = process.env.WEBHOOK_URL || null;
 
 const TRADES_CSV = join(DATA_DIR, "trades.csv");
 const LOG_FILE = join(DATA_DIR, "safety-check-log.json");
@@ -102,6 +103,9 @@ console.log(`[scheduler] daily Telegram digest registered: 00:00 UTC`);
 cron.schedule("5 0 * * 1", () => sendTelegramDigest("weekly"), { timezone: "UTC" });
 console.log(`[scheduler] weekly Telegram digest registered: Monday 00:05 UTC`);
 
+// Register Telegram webhook so the bot can receive commands
+registerWebhook();
+
 // ─── Telegram ────────────────────────────────────────────────────────────────
 
 async function sendTelegram(text) {
@@ -118,60 +122,90 @@ async function sendTelegram(text) {
 }
 
 async function sendTelegramDigest(period = "daily") {
-  if (!existsSync(TRADES_CSV)) return;
+  if (!existsSync(TRADES_CSV)) {
+    await sendTelegram(`📭 No trade data yet. Run the bot first.`);
+    return;
+  }
+
   const lines = readFileSync(TRADES_CSV, "utf8").trim().split("\n");
   const rows = lines.slice(1).map(parseCSVLine).filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r[0]));
 
   const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const daysAgo = (n) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
-  const targetDate = period === "daily" ? yesterday : null;
+  const RANGES = {
+    daily:          { from: daysAgo(1),   to: daysAgo(1), label: `📅 *Daily Report — ${daysAgo(1)}*` },
+    weekly:         { from: daysAgo(7),   to: today,       label: `📆 *Weekly Report — ${daysAgo(7)} → ${today}*` },
+    monthly:        { from: daysAgo(30),  to: today,       label: `🗓 *Monthly Report — ${daysAgo(30)} → ${today}*` },
+    quarterly:      { from: daysAgo(90),  to: today,       label: `📈 *Quarterly Report — ${daysAgo(90)} → ${today}*` },
+    "semi-annual":  { from: daysAgo(180), to: today,       label: `📊 *Semi-Annual Report — ${daysAgo(180)} → ${today}*` },
+    annual:         { from: daysAgo(365), to: today,       label: `🏦 *Annual Report — ${daysAgo(365)} → ${today}*` },
+  };
 
-  const inRange = (r) => period === "daily"
-    ? r[0] === targetDate
-    : r[0] >= weekAgo && r[0] <= today;
+  const range = RANGES[period] || RANGES.daily;
+  const periodRows = rows.filter((r) => r[0] >= range.from && r[0] <= range.to);
 
-  const periodRows = rows.filter(inRange);
   const executed = periodRows.filter((r) => r[11] === "PAPER" || r[11] === "LIVE");
-  const blocked = periodRows.filter((r) => r[11] === "BLOCKED");
+  const blocked  = periodRows.filter((r) => r[11] === "BLOCKED");
+  const buys     = executed.filter((r) => r[4] === "BUY");
+  const sells    = executed.filter((r) => r[4] === "SELL");
+  const wins     = sells.filter((r) => (r[12] || "").includes("TAKE PROFIT"));
+  const losses   = sells.filter((r) => (r[12] || "").includes("STOP LOSS"));
 
-  const buys = executed.filter((r) => r[4] === "BUY");
-  const sells = executed.filter((r) => r[4] === "SELL");
+  const pnlValues = sells.map((r) => {
+    const m = (r[12] || "").match(/P&L: \+?\$?([-\d.]+)/);
+    return m ? parseFloat(m[1]) : 0;
+  });
+  const pnlTotal   = pnlValues.reduce((a, b) => a + b, 0);
+  const bestTrade  = pnlValues.length ? Math.max(...pnlValues) : null;
+  const worstTrade = pnlValues.length ? Math.min(...pnlValues) : null;
+  const avgPnL     = sells.length > 0 ? pnlTotal / sells.length : null;
+  const winRate    = sells.length > 0 ? ((wins.length / sells.length) * 100).toFixed(0) : "—";
+  const mode       = executed.some((r) => r[11] === "LIVE") ? "LIVE" : "PAPER";
 
-  const wins = sells.filter((r) => (r[12] || "").includes("TAKE PROFIT"));
-  const losses = sells.filter((r) => (r[12] || "").includes("STOP LOSS"));
-
-  const pnlTotal = sells.reduce((sum, r) => {
-    const match = (r[12] || "").match(/P&L: ([+-]?\$[\d.]+)/);
-    if (!match) return sum;
-    return sum + parseFloat(match[1].replace("$", ""));
-  }, 0);
-
-  const winRate = sells.length > 0 ? ((wins.length / sells.length) * 100).toFixed(0) : "—";
-  const label = period === "daily" ? `📅 *Daily Report — ${targetDate}*` : `📆 *Weekly Report — ${weekAgo} → ${today}*`;
+  const fmt = (v, sign = true) => v === null ? "—" : `${sign && v >= 0 ? "+" : ""}$${Math.abs(v).toFixed(4)}`;
 
   const msg = [
-    label,
+    range.label,
     ``,
-    `🤖 Symbol: ${SYMBOL} | Mode: PAPER`,
+    `🤖 *${SYMBOL}* | Mode: ${mode}`,
     ``,
-    `📊 *Decisions*`,
-    `  Trades entered:  ${buys.length}`,
-    `  Trades closed:   ${sells.length}`,
-    `  Blocked:         ${blocked.length}`,
+    `📊 *Activity*`,
+    `  Trades entered:   ${buys.length}`,
+    `  Trades closed:    ${sells.length}`,
+    `  Signals blocked:  ${blocked.length}`,
+    `  Total signals:    ${periodRows.length}`,
     ``,
     `🏆 *Results*`,
-    `  ✅ Take profits: ${wins.length}`,
-    `  🛑 Stop losses:  ${losses.length}`,
-    `  Win rate:        ${winRate}%`,
-    `  Net P&L:         ${pnlTotal >= 0 ? "+" : ""}$${pnlTotal.toFixed(4)}`,
+    `  ✅ Take profits:  ${wins.length}`,
+    `  🛑 Stop losses:   ${losses.length}`,
+    `  Win rate:         ${winRate}${sells.length > 0 ? "%" : ""}`,
+    `  Net P&L:          ${pnlTotal >= 0 ? "+" : ""}$${pnlTotal.toFixed(4)}`,
+    `  Avg P&L/trade:    ${fmt(avgPnL)}`,
+    `  Best trade:       ${bestTrade !== null ? fmt(bestTrade) : "—"}`,
+    `  Worst trade:      ${worstTrade !== null ? fmt(worstTrade, false) : "—"}`,
     ``,
+    `📅 *Period:* ${range.from} → ${range.to}`,
     `🔗 Full log: /api/trades/download`,
   ].join("\n");
 
   await sendTelegram(msg);
   console.log(`[telegram] ${period} digest sent`);
+}
+
+async function registerWebhook() {
+  if (!TELEGRAM_TOKEN || !WEBHOOK_URL) return;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: WEBHOOK_URL, allowed_updates: ["message"] }),
+    });
+    const data = await res.json();
+    console.log(`[telegram] webhook ${data.ok ? "registered ✅" : `failed: ${data.description}`}`);
+  } catch (err) {
+    console.error(`[telegram] webhook registration error: ${err.message}`);
+  }
 }
 
 // ─── CSV parser (handles quoted Notes field) ────────────────────────────────
@@ -449,9 +483,39 @@ app.get("/api/run-now", requireKey, (req, res) => {
 });
 
 app.get("/api/report/send", requireKey, async (req, res) => {
-  const period = req.query.period === "weekly" ? "weekly" : "daily";
+  const valid = ["daily", "weekly", "monthly", "quarterly", "semi-annual", "annual"];
+  const period = valid.includes(req.query.period) ? req.query.period : "daily";
   await sendTelegramDigest(period);
   res.json({ ok: true, sent: period });
+});
+
+// ─── Telegram incoming webhook ────────────────────────────────────────────────
+// Receives messages from Telegram. Responds to report commands typed in chat.
+const REPORT_COMMANDS = {
+  "daily report": "daily",
+  "weekly report": "weekly",
+  "monthly report": "monthly",
+  "quarterly report": "quarterly",
+  "quarterly": "quarterly",
+  "semi annual report": "semi-annual",
+  "semi-annual report": "semi-annual",
+  "semi annually": "semi-annual",
+  "semi-annual": "semi-annual",
+  "annual report": "annual",
+  "yearly report": "annual",
+  "annual": "annual",
+};
+
+app.post("/telegram-webhook", express.json(), (req, res) => {
+  res.sendStatus(200); // acknowledge to Telegram immediately
+  const msg = req.body?.message;
+  if (!msg) return;
+  if (String(msg.chat?.id) !== String(TELEGRAM_CHAT_ID)) return; // ignore other chats
+  const text = (msg.text || "").toLowerCase().trim();
+  const period = REPORT_COMMANDS[text];
+  if (period) {
+    sendTelegramDigest(period).catch((err) => console.error(`[telegram] digest error: ${err.message}`));
+  }
 });
 
 app.get("/api/trades/download", requireKey, (req, res) => {
