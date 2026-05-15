@@ -490,7 +490,7 @@ app.get("/api/report/send", requireKey, async (req, res) => {
 });
 
 // ─── Telegram incoming webhook ────────────────────────────────────────────────
-// Receives messages from Telegram. Responds to report commands typed in chat.
+// Receives messages from Telegram. Responds to report commands typed or spoken.
 const REPORT_COMMANDS = {
   "daily report": "daily",
   "weekly report": "weekly",
@@ -506,15 +506,69 @@ const REPORT_COMMANDS = {
   "annual": "annual",
 };
 
+async function transcribeVoice(fileId) {
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!openaiKey) throw new Error("OPENAI_API_KEY not set");
+
+  // Step 1: get the file path from Telegram
+  const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
+  const fileData = await fileRes.json();
+  if (!fileData.ok) throw new Error(`getFile failed: ${fileData.description}`);
+
+  // Step 2: download the audio buffer
+  const audioRes = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileData.result.file_path}`);
+  const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+
+  // Step 3: send to OpenAI Whisper
+  const form = new FormData();
+  form.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "voice.ogg");
+  form.append("model", "whisper-1");
+
+  const whisperRes = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${openaiKey}` },
+    body: form,
+  });
+  const whisperData = await whisperRes.json();
+  return (whisperData.text || "").trim();
+}
+
+async function handleCommand(text) {
+  const normalised = text.toLowerCase().trim().replace(/[.,!?]+$/, "");
+  const period = REPORT_COMMANDS[normalised];
+  if (period) {
+    await sendTelegramDigest(period);
+  } else {
+    await sendTelegram(
+      `🤖 Command not recognised: _"${text}"_\n\n` +
+      `Try saying or typing:\n` +
+      `• daily report\n• weekly report\n• monthly report\n` +
+      `• quarterly report\n• semi annual report\n• annual report`
+    );
+  }
+}
+
 app.post("/telegram-webhook", express.json(), (req, res) => {
   res.sendStatus(200); // acknowledge to Telegram immediately
   const msg = req.body?.message;
   if (!msg) return;
-  if (String(msg.chat?.id) !== String(TELEGRAM_CHAT_ID)) return; // ignore other chats
-  const text = (msg.text || "").toLowerCase().trim();
-  const period = REPORT_COMMANDS[text];
-  if (period) {
-    sendTelegramDigest(period).catch((err) => console.error(`[telegram] digest error: ${err.message}`));
+  if (String(msg.chat?.id) !== String(TELEGRAM_CHAT_ID)) return;
+
+  if (msg.text) {
+    handleCommand(msg.text).catch((err) => console.error(`[telegram] command error: ${err.message}`));
+    return;
+  }
+
+  if (msg.voice) {
+    transcribeVoice(msg.voice.file_id)
+      .then((text) => {
+        console.log(`[telegram] voice transcribed: "${text}"`);
+        return handleCommand(text);
+      })
+      .catch((err) => {
+        console.error(`[telegram] voice error: ${err.message}`);
+        return sendTelegram(`❌ Could not transcribe voice message: ${err.message}`);
+      });
   }
 });
 
