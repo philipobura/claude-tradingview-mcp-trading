@@ -1,5 +1,5 @@
 # PROJECT AUDIT — Claude Trading Bot
-**Last updated:** 2026-05-14 (Telegram trade alerts)  
+**Last updated:** 2026-05-15 (Telegram report commands)  
 **Audited by:** Claude Code
 
 ---
@@ -37,7 +37,8 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 | `GET /api/log` | Raw safety-check decision log as JSON |
 | `GET /api/trades/download` | Download `trades.csv` directly from Railway volume |
 | `GET /api/run-now` | Trigger an immediate bot run |
-| `GET /api/report/send` | Trigger Telegram digest now (`?period=daily` or `?period=weekly`) |
+| `GET /api/report/send` | Trigger Telegram digest (`?period=daily\|weekly\|monthly\|quarterly\|semi-annual\|annual`) |
+| `POST /telegram-webhook` | Telegram webhook receiver — routes chat commands to report generator |
 
 ---
 
@@ -80,6 +81,17 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - Fixed by using the last **completed** candle (`index -2`) for both the current volume reading and the 20-period average baseline (`slice(-22, -2)`).
 - Volume now reads correctly — confirmed at 97% and 248% on subsequent runs.
 
+### 2026-05-15 — Telegram Report Commands (`843b4cb`)
+- `POST /telegram-webhook` endpoint added to `server.js` — receives incoming Telegram messages and routes them to the report generator.
+- `registerWebhook()` runs on server startup and auto-registers the webhook URL with Telegram's API (requires `WEBHOOK_URL` env var, now set on Railway).
+- `sendTelegramDigest()` generalised to support **6 reporting periods**: daily, weekly, monthly (30d), quarterly (90d), semi-annual (180d), annual (365d).
+- Each report includes: trades entered/closed/blocked, take profits, stop losses, win rate, net P&L, avg P&L per trade, best trade, worst trade.
+- **Commands recognised** — type any of these directly in Telegram chat:
+  - `daily report` · `weekly report` · `monthly report`
+  - `quarterly report` · `semi annual report` · `annual report`
+- Knowledge base: `trades.csv` + `safety-check-log.json` on Railway volume — all historical trade and decision data feeds the reports.
+- Webhook registration debug: Railway deploy was slow on first push — manual `railway up --detach` confirmed route live. Root cause was Railway serving cached old build.
+
 ### 2026-05-14 — Telegram Trade Alerts (`bd2be8c`)
 - `sendTelegram()` helper added to `bot.js` (reads same `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` env vars already set on Railway).
 - **BUY alert:** fires on every paper or live trade entry — shows price, size, TP, SL, RSI(3).
@@ -111,6 +123,7 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 | `MAX_TRADES_PER_DAY` | `3` | Daily trade limit |
 | `TELEGRAM_BOT_TOKEN` | *(set)* | Telegram bot token for digest messages |
 | `TELEGRAM_CHAT_ID` | `204857812` | Telegram chat ID to deliver digests to |
+| `WEBHOOK_URL` | `https://claude-trading-bot-production-750c.up.railway.app/telegram-webhook` | Telegram webhook endpoint — auto-registered on server startup |
 
 ---
 
@@ -199,3 +212,4 @@ Automated trading bot deployed on Railway. Pulls live OHLCV data from Binance, r
 - [x] Telegram daily/weekly digest — live as of 2026-05-14
 - [x] Volume filter 0% bug fixed — live as of 2026-05-14
 - [x] Telegram trade alerts (BUY entry, TP/SL exit, near-entry warning) — live as of 2026-05-14
+- [x] Telegram report commands (daily/weekly/monthly/quarterly/semi-annual/annual) — live as of 2026-05-15
