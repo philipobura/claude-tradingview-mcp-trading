@@ -12,7 +12,7 @@
   "indicators": {
     "ema_8": "Trend direction. Price above EMA(8) = bullish momentum. Below = bearish.",
     "vwap": "Session bias. Price above VWAP = buyers in control. Below = sellers. Resets at midnight UTC.",
-    "rsi_3": "Entry timing. RSI on 3 candles only — extremely sensitive. Below 25 in an uptrend = deep pullback, strong snap-back setup. Above 80 in a downtrend = extreme overbought, reversal likely.",
+    "rsi_3": "Entry timing. RSI on 3 candles only — extremely sensitive. Below 30 in an uptrend = pullback, snap-back setup. Above 70 in a downtrend = overbought, reversal likely.",
     "volume": "Conviction filter. Current candle volume must exceed 50% of the 20-period average. Uses last completed candle to avoid Binance's near-zero reading on forming candles."
   },
 
@@ -25,14 +25,14 @@
     "long": [
       "Price is above VWAP — buyers in control for the session",
       "Price is above EMA(8) — uptrend confirmed",
-      "RSI(3) has dropped below 25 — deep pullback in an uptrend, snap-back likely",
+      "RSI(3) has dropped below 30 — pullback in an uptrend, snap-back likely",
       "Price is within 1.5% of VWAP — not overextended",
       "Volume exceeds 50% of 20-period average — move has conviction"
     ],
     "short": [
       "Price is below VWAP — sellers in control",
       "Price is below EMA(8) — downtrend confirmed",
-      "RSI(3) has spiked above 80 — extreme overbought in a downtrend, reversal likely",
+      "RSI(3) has spiked above 70 — overbought in a downtrend, reversal likely",
       "Price is within 1.5% of VWAP — not overextended",
       "Volume exceeds 50% of 20-period average — move has conviction"
     ]

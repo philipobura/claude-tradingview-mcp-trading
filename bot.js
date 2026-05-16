@@ -309,12 +309,11 @@ function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish
       price > ema8,
     );
 
-    // Tightened: 35 → 25 — require deeper pullback for stronger snap-back signal
     check(
-      "RSI(3) below 25 (deep pullback in uptrend)",
-      "< 25",
+      "RSI(3) below 30 (pullback in uptrend)",
+      "< 30",
       rsi3.toFixed(2),
-      rsi3 < 25,
+      rsi3 < 30,
     );
 
     const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
@@ -355,12 +354,11 @@ function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish
       price < ema8,
     );
 
-    // Tightened: 65 → 80 — require extreme overbought for counter-trend entry
     check(
-      "RSI(3) above 80 (extreme overbought reversal setup)",
-      "> 80",
+      "RSI(3) above 70 (overbought in downtrend)",
+      "> 70",
       rsi3.toFixed(2),
-      rsi3 > 80,
+      rsi3 > 70,
     );
 
     const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
@@ -794,10 +792,10 @@ async function run() {
     const onlyRsiFailing = failing.length === 1 && failing[0].label.startsWith("RSI");
     if (onlyRsiFailing) {
       const bullishBias = price > vwap && price > ema8;
-      const nearThreshold = bullishBias ? rsi3 < 30 : rsi3 > 75;
+      const nearThreshold = bullishBias ? rsi3 < 35 : rsi3 > 65;
       if (nearThreshold) {
         const bias = bullishBias ? "LONG" : "SHORT";
-        const threshold = bullishBias ? "< 25" : "> 80";
+        const threshold = bullishBias ? "< 30" : "> 70";
         await sendTelegram(
           `⚠️ *Near Entry — ${CONFIG.symbol}*\n` +
           `Bias: ${bias} | RSI(3): ${rsi3.toFixed(1)} (need ${threshold})\n` +
