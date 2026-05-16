@@ -269,7 +269,7 @@ function calcVWAP(candles) {
 
 // ─── Safety Check ───────────────────────────────────────────────────────────
 
-function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules) {
+function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish, higherTfBearish) {
   const results = [];
 
   const check = (label, required, actual, pass) => {
@@ -331,6 +331,13 @@ function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules) {
       `${volPct.toFixed(0)}%`,
       avgVol20 === 0 || currentVol > avgVol20 * 0.5,
     );
+
+    check(
+      "1H trend is bullish (higher timeframe confirms)",
+      "Price > 1H EMA(8)",
+      higherTfBullish ? "CONFIRMED" : "NOT CONFIRMED",
+      higherTfBullish,
+    );
   } else if (bearishBias) {
     console.log("  Bias: BEARISH — checking reversal entry conditions\n");
 
@@ -369,6 +376,13 @@ function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules) {
       "> 50%",
       `${volPct.toFixed(0)}%`,
       avgVol20 === 0 || currentVol > avgVol20 * 0.5,
+    );
+
+    check(
+      "1H trend is bearish (higher timeframe confirms)",
+      "Price < 1H EMA(8)",
+      higherTfBearish ? "CONFIRMED" : "NOT CONFIRMED",
+      higherTfBearish,
     );
   } else {
     console.log("  Bias: NEUTRAL — no clear direction. No trade.\n");
@@ -742,13 +756,14 @@ async function run() {
   console.log("\n── Fetching market data from Binance ───────────────────\n");
   const candles = await fetchCandles(CONFIG.symbol, CONFIG.timeframe, 500);
   const closes = candles.map((c) => c.close);
-  const price = closes[closes.length - 1];
-  console.log(`  Current price: $${price.toFixed(2)}`);
+  const closedCloses = closes.slice(0, -1); // exclude live forming candle
+  const price = closedCloses[closedCloses.length - 1]; // last closed candle
+  console.log(`  Signal price (last closed candle): $${price.toFixed(2)}`);
 
-  // Calculate indicators
-  const ema8 = calcEMA(closes, 8);
-  const vwap = calcVWAP(candles);
-  const rsi3 = calcRSI(closes, 3);
+  // Calculate indicators on closed candles only
+  const ema8 = calcEMA(closedCloses, 8);
+  const vwap = calcVWAP(candles.slice(0, -1));
+  const rsi3 = calcRSI(closedCloses, 3);
 
   console.log(`  EMA(8):  $${ema8.toFixed(2)}`);
   console.log(`  VWAP:    $${vwap !== null ? vwap.toFixed(2) : "N/A"}`);
@@ -759,8 +774,19 @@ async function run() {
     return;
   }
 
+  // 1H trend filter — only trade in the direction the higher timeframe confirms
+  console.log("\n── 1H Trend Filter ─────────────────────────────────────\n");
+  const candles1H = await fetchCandles(CONFIG.symbol, "1H", 20);
+  const closes1H = candles1H.map((c) => c.close).slice(0, -1);
+  const ema8_1H = calcEMA(closes1H, 8);
+  const price1H = closes1H[closes1H.length - 1];
+  const higherTfBullish = price1H > ema8_1H;
+  const higherTfBearish = price1H < ema8_1H;
+  const htfTrend = higherTfBullish ? "BULLISH" : higherTfBearish ? "BEARISH" : "NEUTRAL";
+  console.log(`  1H Price: $${price1H.toFixed(2)} | 1H EMA(8): $${ema8_1H.toFixed(2)} | Trend: ${htfTrend}`);
+
   // Run safety check
-  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, candles, rules);
+  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish, higherTfBearish);
 
   // Near-entry alert: RSI is the only failing condition and within 5 points of threshold
   if (!allPass) {
