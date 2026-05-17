@@ -737,6 +737,13 @@ async function run() {
     return;
   }
 
+  // Time filter — block new entries during low-liquidity hours (20:00–00:00 UTC)
+  const utcHour = new Date().getUTCHours();
+  if (utcHour >= 20) {
+    console.log(`\n⏰ Low-liquidity window (${utcHour}:00 UTC) — no new entries between 20:00–00:00 UTC\n`);
+    return;
+  }
+
   // Load strategy
   const rules = JSON.parse(readFileSync("rules.json", "utf8"));
   console.log(`\nStrategy: ${rules.strategy.name}`);

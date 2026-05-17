@@ -51,6 +51,7 @@
     "Maximum trade size capped by MAX_TRADE_SIZE_USD env var",
     "Maximum trades per day capped by MAX_TRADES_PER_DAY env var",
     "Do not trade if price is more than 1.5% away from VWAP — overextended",
+    "No new entries between 20:00–00:00 UTC — low liquidity, unreliable signals",
     "Paper trade first — validate this strategy on your specific asset before going live"
   ],
 
