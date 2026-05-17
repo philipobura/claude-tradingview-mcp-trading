@@ -269,7 +269,7 @@ function calcVWAP(candles) {
 
 // ─── Safety Check ───────────────────────────────────────────────────────────
 
-function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish, higherTfBearish) {
+function runSafetyCheck(price, ema8, vwap, rsi7, candles, rules, higherTfBullish, higherTfBearish) {
   const results = [];
 
   const check = (label, required, actual, pass) => {
@@ -310,10 +310,10 @@ function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish
     );
 
     check(
-      "RSI(3) below 30 (pullback in uptrend)",
+      "RSI(7) below 30 (pullback in uptrend)",
       "< 30",
-      rsi3.toFixed(2),
-      rsi3 < 30,
+      rsi7.toFixed(2),
+      rsi7 < 30,
     );
 
     const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
@@ -355,10 +355,10 @@ function runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish
     );
 
     check(
-      "RSI(3) above 70 (overbought in downtrend)",
+      "RSI(7) above 70 (overbought in downtrend)",
       "> 70",
-      rsi3.toFixed(2),
-      rsi3 > 70,
+      rsi7.toFixed(2),
+      rsi7 > 70,
     );
 
     const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
@@ -761,13 +761,13 @@ async function run() {
   // Calculate indicators on closed candles only
   const ema8 = calcEMA(closedCloses, 8);
   const vwap = calcVWAP(candles.slice(0, -1));
-  const rsi3 = calcRSI(closedCloses, 3);
+  const rsi7 = calcRSI(closedCloses, 7);
 
   console.log(`  EMA(8):  $${ema8.toFixed(2)}`);
   console.log(`  VWAP:    $${vwap !== null ? vwap.toFixed(2) : "N/A"}`);
-  console.log(`  RSI(3):  ${rsi3 !== null ? rsi3.toFixed(2) : "N/A"}`);
+  console.log(`  RSI(7):  ${rsi7 !== null ? rsi7.toFixed(2) : "N/A"}`);
 
-  if (vwap === null || rsi3 === null) {
+  if (vwap === null || rsi7 === null) {
     console.log("\n⚠️  Not enough data to calculate indicators. Exiting.");
     return;
   }
@@ -784,7 +784,7 @@ async function run() {
   console.log(`  1H Price: $${price1H.toFixed(2)} | 1H EMA(8): $${ema8_1H.toFixed(2)} | Trend: ${htfTrend}`);
 
   // Run safety check
-  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, candles, rules, higherTfBullish, higherTfBearish);
+  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi7, candles, rules, higherTfBullish, higherTfBearish);
 
   // Near-entry alert: RSI is the only failing condition and within 5 points of threshold
   if (!allPass) {
@@ -792,13 +792,13 @@ async function run() {
     const onlyRsiFailing = failing.length === 1 && failing[0].label.startsWith("RSI");
     if (onlyRsiFailing) {
       const bullishBias = price > vwap && price > ema8;
-      const nearThreshold = bullishBias ? rsi3 < 35 : rsi3 > 65;
+      const nearThreshold = bullishBias ? rsi7 < 35 : rsi7 > 65;
       if (nearThreshold) {
         const bias = bullishBias ? "LONG" : "SHORT";
         const threshold = bullishBias ? "< 30" : "> 70";
         await sendTelegram(
           `⚠️ *Near Entry — ${CONFIG.symbol}*\n` +
-          `Bias: ${bias} | RSI(3): ${rsi3.toFixed(1)} (need ${threshold})\n` +
+          `Bias: ${bias} | RSI(7): ${rsi7.toFixed(1)} (need ${threshold})\n` +
           `Price: $${price.toFixed(2)} | EMA(8): $${ema8.toFixed(2)} | VWAP: $${vwap.toFixed(2)}\n` +
           `_All other conditions pass — watching for RSI_`
         );
@@ -820,7 +820,7 @@ async function run() {
     symbol: CONFIG.symbol,
     timeframe: CONFIG.timeframe,
     price,
-    indicators: { ema8, vwap, rsi3 },
+    indicators: { ema8, vwap, rsi7 },
     conditions: results,
     allPass,
     tradeSize,
@@ -865,7 +865,7 @@ async function run() {
         `📋 *PAPER BUY — ${CONFIG.symbol}*\n` +
         `Price: $${price.toFixed(2)} | Size: $${tradeSize.toFixed(2)}\n` +
         `TP: $${(price * (1 + CONFIG.takeProfitPct)).toFixed(2)} (+${(CONFIG.takeProfitPct * 100).toFixed(1)}%) | SL: $${(price * (1 - CONFIG.stopLossPct)).toFixed(2)} (-${(CONFIG.stopLossPct * 100).toFixed(1)}%)\n` +
-        `RSI(3): ${rsi3.toFixed(1)} | VWAP: $${vwap.toFixed(2)}`
+        `RSI(7): ${rsi7.toFixed(1)} | VWAP: $${vwap.toFixed(2)}`
       );
     } else {
       console.log(
